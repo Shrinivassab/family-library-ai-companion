@@ -1,6 +1,5 @@
 import streamlit as st
 from groq import Groq
-from PIL import Image
 import base64
 import io
 import os
@@ -16,7 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 # --- CONFIG ---
 load_dotenv()
-API_KEY = os.getenv("GROQ_API_KEY", "your-actual-key-here")
+API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=API_KEY)
 
 # --- FONT SETUP ---
@@ -27,46 +26,56 @@ if os.path.exists(font_path):
 else:
     FONT = 'Helvetica'
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Family Library AI Companion", page_icon="📚", layout="wide")
-st.title("📚 Family Library AI Companion")
-st.write("Personalized reading plans for every child — Powered by AI")
-
-# --- SIDEBAR: CHILD PROFILE ---
-st.sidebar.header("👤 Child Profile")
-name = st.sidebar.text_input("Child's Name", value="Priya")
-age = st.sidebar.number_input("Age", min_value=4, max_value=18, value=8)
-grade = st.sidebar.selectbox("Class", ["Class 1","Class 2","Class 3","Class 4",
-                                        "Class 5","Class 6","Class 7","Class 8"], index=2)
-language = st.sidebar.selectbox("Preferred Language", ["English", "Tamil"])
-
-st.sidebar.header("📖 Upload Book")
-uploaded_file = st.sidebar.file_uploader(
-    "Photo or PDF of book",
-    type=["jpg", "jpeg", "png", "pdf"]
-)
-
 # --- HELPERS ---
-def extract_pdf_text(file_bytes, max_pages=5):
+def extract_pdf_text(file_bytes, max_pages=10):
     pdf = fitz.open(stream=file_bytes, filetype="pdf")
+    total_pages = len(pdf)
     text = ""
-    for i, page in enumerate(pdf):
-        if i >= max_pages:
-            break
-        text += page.get_text()
-    return text[:3000]
+    start_page = min(3, total_pages - 1)
+    for i in range(start_page, min(start_page + max_pages, total_pages)):
+        page_text = pdf[i].get_text()
+        if page_text.strip():
+            text += f"\n--- Page {i+1} ---\n{page_text}"
+    return text[:5000]
+
+def extract_pdf_as_image(file_bytes):
+    pdf = fitz.open(stream=file_bytes, filetype="pdf")
+    total_pages = len(pdf)
+    
+    # Try to find a good content page (skip cover, copyright, index)
+    # Usually content starts around page 8-12
+    start_page = min(8, total_pages - 1)
+    
+    page = pdf[start_page]
+    mat = fitz.Matrix(2.0, 2.0)  # higher zoom for better quality
+    pix = page.get_pixmap(matrix=mat)
+    img_bytes = pix.tobytes("jpeg")
+    return base64.b64encode(img_bytes).decode('utf-8')
 
 def image_to_base64(file_bytes):
     return base64.b64encode(file_bytes).decode('utf-8')
 
-def get_book_content():
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-        if uploaded_file.type == "application/pdf":
-            return extract_pdf_text(file_bytes), None, "pdf"
+def process_uploaded_file(uploaded_file):
+    """Process any uploaded file and return (pdf_text, image_b64, file_type)"""
+    file_bytes = uploaded_file.read()
+    
+    if uploaded_file.type == "application/pdf":
+        # Try text extraction first
+        text = extract_pdf_text(file_bytes)
+        if len(text.strip()) > 100:
+            # Good text PDF
+            st.sidebar.success(f"✅ Text PDF loaded: {len(text)} chars")
+            return text, None, "pdf_text"
         else:
-            return None, image_to_base64(file_bytes), "image"
-    return None, None, None
+            # Scanned/image PDF — convert to image
+            st.sidebar.success("✅ Scanned PDF loaded as image")
+            image_b64 = extract_pdf_as_image(file_bytes)
+            return None, image_b64, "pdf_image"
+    else:
+        # Regular image upload
+        st.sidebar.success("✅ Image loaded")
+        image_b64 = image_to_base64(file_bytes)
+        return None, image_b64, "image"
 
 def call_ai(prompt, image_b64=None):
     if image_b64:
@@ -109,7 +118,6 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
     story.append(Paragraph("Parent Report Card", h1_style))
     story.append(Spacer(1, 0.2*inch))
 
-    # Profile table
     profile_data = [
         ['Child Name', name],
         ['Age', f'{age} years'],
@@ -129,7 +137,6 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
     story.append(profile_table)
     story.append(Spacer(1, 0.3*inch))
 
-    # Reading Plan
     story.append(Paragraph("7-Day Personalized Reading Plan", h2_style))
     for line in plan_text.split('\n'):
         line = line.strip().replace('**', '')
@@ -146,7 +153,6 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
         except Exception:
             pass
 
-    # Bloom's Section
     if blooms_text:
         story.append(Spacer(1, 0.3*inch))
         story.append(Paragraph("Bloom's Taxonomy Questions", h2_style))
@@ -171,18 +177,64 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
     buffer.seek(0)
     return buffer
 
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Family Library AI Companion", page_icon="📚", layout="wide")
+st.title("📚 Family Library AI Companion")
+st.write("Personalized reading plans for every child — Powered by AI")
+
 # --- SESSION STATE ---
 if 'plan_text' not in st.session_state:
     st.session_state.plan_text = None
 if 'blooms_text' not in st.session_state:
     st.session_state.blooms_text = None
+if 'pdf_text_cache' not in st.session_state:
+    st.session_state.pdf_text_cache = None
+if 'image_b64_cache' not in st.session_state:
+    st.session_state.image_b64_cache = None
+if 'file_type_cache' not in st.session_state:
+    st.session_state.file_type_cache = None
+if 'last_file_name' not in st.session_state:
+    st.session_state.last_file_name = None
+
+# --- SIDEBAR ---
+st.sidebar.header("👤 Child Profile")
+name = st.sidebar.text_input("Child's Name", value="Priya")
+age = st.sidebar.number_input("Age", min_value=4, max_value=18, value=8)
+grade = st.sidebar.selectbox("Class", ["Class 1","Class 2","Class 3","Class 4",
+                                        "Class 5","Class 6","Class 7","Class 8"], index=2)
+language = st.sidebar.selectbox("Preferred Language", ["English", "Tamil"])
+
+st.sidebar.header("📖 Upload Book")
+uploaded_file = st.sidebar.file_uploader(
+    "Photo or PDF of book",
+    type=["jpg", "jpeg", "png", "pdf"]
+)
+
+# Process file only when new file uploaded
+if uploaded_file is not None:
+    if uploaded_file.name != st.session_state.last_file_name:
+        pdf_text, image_b64, file_type = process_uploaded_file(uploaded_file)
+        st.session_state.pdf_text_cache = pdf_text
+        st.session_state.image_b64_cache = image_b64
+        st.session_state.file_type_cache = file_type
+        st.session_state.last_file_name = uploaded_file.name
+        # Clear previous results when new file uploaded
+        st.session_state.plan_text = None
+        st.session_state.blooms_text = None
+else:
+    if st.session_state.last_file_name:
+        st.sidebar.info("Using previously loaded book")
+
+def get_book_content():
+    return (
+        st.session_state.pdf_text_cache,
+        st.session_state.image_b64_cache,
+        st.session_state.file_type_cache
+    )
 
 # --- TABS ---
 tab1, tab2, tab3 = st.tabs(["📅 7-Day Reading Plan", "🧠 Bloom's Taxonomy Questions", "📄 Download Report"])
 
-# ============================================================
-# TAB 1: READING PLAN
-# ============================================================
 with tab1:
     st.header("Generate 7-Day Reading Plan")
 
@@ -191,8 +243,6 @@ with tab1:
             st.warning("Please enter the child's name in the sidebar!")
         else:
             with st.spinner("Creating personalized reading plan..."):
-                if uploaded_file:
-                    uploaded_file.seek(0)
                 pdf_text, image_b64, file_type = get_book_content()
 
                 base_prompt = f"""You are an educational AI for rural Indian students.
@@ -206,9 +256,23 @@ Format clearly for a parent to understand.
 Respond in {language}."""
 
                 if pdf_text:
-                    prompt = f"Book content:\n{pdf_text}\n\nBased on this book, {base_prompt}"
+                    prompt = f"""The following is ACTUAL content from a real textbook.
+Use ONLY this content to create the reading plan.
+Do NOT invent stories or use other books.
+
+===BOOK CONTENT===
+{pdf_text}
+===END===
+
+{base_prompt}"""
                 elif image_b64:
-                    prompt = f"Look at this book image and {base_prompt}"
+                    prompt = f"""This is a page from a Tamil Nadu government school textbook.
+Look carefully at ALL the text, topics, lessons, and content visible in this image.
+Identify the specific subject, chapter names, and key concepts shown.
+Use ONLY the actual content visible — specific lesson names, topics, exercises.
+Do NOT talk about cover pages, index pages, or generic book structure.
+
+{base_prompt}"""
                 else:
                     prompt = base_prompt
 
@@ -218,9 +282,6 @@ Respond in {language}."""
     if st.session_state.plan_text:
         st.markdown(st.session_state.plan_text)
 
-# ============================================================
-# TAB 2: BLOOM'S TAXONOMY
-# ============================================================
 with tab2:
     st.header("🧠 Bloom's Taxonomy Question Generator")
     st.write("Generates questions at all 6 thinking levels for deeper learning")
@@ -243,37 +304,41 @@ with tab2:
             st.warning("Please enter the child's name in the sidebar!")
         else:
             with st.spinner("Generating Bloom's Taxonomy questions..."):
-                if uploaded_file:
-                    uploaded_file.seek(0)
                 pdf_text, image_b64, file_type = get_book_content()
 
                 blooms_prompt = f"""You are an expert educational psychologist using Bloom's Taxonomy.
 A child named {name}, age {age}, in {grade}, prefers {language}.
 
-IMPORTANT: Generate ALL questions STRICTLY based on the book content provided.
-Do NOT use generic examples or unrelated topics like Harry Potter or The Jungle Book.
-Every question must reference specific topics, chapters, or concepts from the book.
+CRITICAL: Generate ALL questions STRICTLY based on the book content provided.
+Do NOT use generic examples or placeholder text like [specific story name].
+Every single question must reference actual topics from the book.
 
-Generate questions covering ALL 6 levels of Bloom's Taxonomy:
+Generate questions for ALL 6 levels:
+1. REMEMBERING - 3 questions (recall facts FROM THE BOOK)
+2. UNDERSTANDING - 3 questions (explain FROM THE BOOK in own words)
+3. APPLYING - 3 questions (apply FROM THE BOOK knowledge)
+4. ANALYZING - 3 questions (analyze FROM THE BOOK topics)
+5. EVALUATING - 3 questions (judge FROM THE BOOK ideas)
+6. CREATING - 3 questions (create based on THE BOOK)
 
-1. REMEMBERING - 3 questions (recall specific facts FROM THE BOOK)
-2. UNDERSTANDING - 3 questions (explain concepts FROM THE BOOK in own words)
-3. APPLYING - 3 questions (apply knowledge FROM THE BOOK in new situations)
-4. ANALYZING - 3 questions (analyze topics FROM THE BOOK, find patterns)
-5. EVALUATING - 3 questions (judge and justify ideas FROM THE BOOK)
-6. CREATING - 3 questions (create something new based on THE BOOK content)
-
-For each level also provide:
-- One parent activity related to THE BOOK topic
-- Difficulty: Easy / Medium / Hard
-
+Each level: include parent activity + difficulty (Easy/Medium/Hard)
 Age-appropriate for {age} year old in {grade}.
 Respond in {language}."""
 
                 if pdf_text:
-                    blooms_prompt = f"Book content:\n{pdf_text}\n\n{blooms_prompt}"
+                    blooms_prompt = f"""ACTUAL textbook content below. Use ONLY this.
+Do NOT use placeholder text like [specific story name from the book].
+
+===BOOK CONTENT===
+{pdf_text}
+===END===
+
+{blooms_prompt}"""
                 elif image_b64:
-                    blooms_prompt = f"Based on this book image, {blooms_prompt}"
+                    blooms_prompt = f"""Look at this book image carefully.
+Use ONLY what you see in this book. No placeholders.
+
+{blooms_prompt}"""
 
                 st.session_state.blooms_text = call_ai(blooms_prompt, image_b64)
                 st.success("✅ Bloom's questions generated!")
@@ -281,9 +346,6 @@ Respond in {language}."""
     if st.session_state.blooms_text:
         st.markdown(st.session_state.blooms_text)
 
-# ============================================================
-# TAB 3: DOWNLOAD REPORT
-# ============================================================
 with tab3:
     st.header("📄 Download Parent Report Card")
 
@@ -291,7 +353,6 @@ with tab3:
         st.warning("Please generate a Reading Plan and/or Bloom's Questions first!")
     else:
         st.success("Your report is ready to download!")
-
         if st.session_state.plan_text:
             st.write("✅ Reading Plan included")
         if st.session_state.blooms_text:
