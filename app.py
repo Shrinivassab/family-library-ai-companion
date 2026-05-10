@@ -14,7 +14,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # --- CONFIG ---
-load_dotenv()
+
+from pathlib import Path
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=API_KEY)
 
