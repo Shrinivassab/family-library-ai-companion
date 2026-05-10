@@ -77,6 +77,49 @@ def process_uploaded_file(uploaded_file):
         image_b64 = image_to_base64(file_bytes)
         return None, image_b64, "image"
 
+def get_age_profile(age, grade):
+    if grade in ["Class 1", "Class 2"]:
+        return """
+VERY YOUNG LEARNER (Age 5-7):
+- Use VERY simple words only
+- Activities max 10 minutes
+- Only 1-2 sentence instructions
+- Fun games and drawings only
+- Quiz questions must be YES/NO or one word answers
+- Vocabulary max 3 very simple words per day
+- Example activity: "Point to the picture and say the word"
+"""
+    elif grade in ["Class 3", "Class 4"]:
+        return """
+YOUNG LEARNER (Age 8-10):
+- Use simple sentences
+- Activities 15 minutes
+- Mix of reading and fun activities
+- Quiz questions can be short answers
+- Vocabulary 3 simple words with easy meanings
+- Example activity: "Read the paragraph and answer"
+"""
+    elif grade in ["Class 5", "Class 6"]:
+        return """
+INTERMEDIATE LEARNER (Age 10-12):
+- Can handle paragraphs
+- Activities 15-20 minutes
+- Include some critical thinking
+- Quiz questions need 2-3 sentence answers
+- Vocabulary 3-5 words with meanings
+- Example activity: "Read and summarize in own words"
+"""
+    else:
+        return """
+ADVANCED LEARNER (Age 12-15):
+- Can handle complex text
+- Activities 20-25 minutes
+- Include analysis and evaluation
+- Quiz questions need detailed answers
+- Vocabulary includes subject-specific terms
+- Example activity: "Analyze and compare concepts"
+"""
+
 def call_ai(prompt, image_b64=None):
     if image_b64:
         response = client.chat.completions.create(
@@ -225,12 +268,27 @@ else:
     if st.session_state.last_file_name:
         st.sidebar.info("Using previously loaded book")
 
+if st.session_state.last_file_name:
+    st.sidebar.info(f"📚 Book: {st.session_state.last_file_name}")
+
 def get_book_content():
     return (
         st.session_state.pdf_text_cache,
         st.session_state.image_b64_cache,
         st.session_state.file_type_cache
     )
+
+# --- WELCOME MESSAGE ---
+if not st.session_state.last_file_name:
+    st.info("""
+    👋 **Welcome! Here's how to use this app:**
+
+    1. 👤 Enter child's name, age and class in the **left sidebar**
+    2. 📖 Upload a **book photo or PDF** in the sidebar
+    3. Click **Generate Reading Plan** for a 7-day plan
+    4. Click **Bloom's Questions** for deeper learning questions
+    5. Download the **Parent Report Card** PDF
+    """)
 
 # --- TABS ---
 tab1, tab2, tab3 = st.tabs(["📅 7-Day Reading Plan", "🧠 Bloom's Taxonomy Questions", "📄 Download Report"])
@@ -245,13 +303,19 @@ with tab1:
             with st.spinner("Creating personalized reading plan..."):
                 pdf_text, image_b64, file_type = get_book_content()
 
+                age_profile = get_age_profile(age, grade)
+
                 base_prompt = f"""You are an educational AI for rural Indian students.
 A child named {name}, age {age}, in {grade}, prefers {language}.
-Generate a 7-day personalized reading plan with:
-- Daily activities (15-20 minutes each)
-- 3 quiz questions per day
-- 3 vocabulary words per day
-- Tips for parents
+
+{age_profile}
+
+Generate a 7-day personalized reading plan following the above age profile strictly.
+Include:
+- Daily activities appropriate for this age
+- 3 quiz questions at the right difficulty level
+- 3 vocabulary words suitable for this age
+- Tips for parents on how to help this age group
 Format clearly for a parent to understand.
 Respond in {language}."""
 
@@ -306,12 +370,17 @@ with tab2:
             with st.spinner("Generating Bloom's Taxonomy questions..."):
                 pdf_text, image_b64, file_type = get_book_content()
 
+                age_profile = get_age_profile(age, grade)
+
                 blooms_prompt = f"""You are an expert educational psychologist using Bloom's Taxonomy.
 A child named {name}, age {age}, in {grade}, prefers {language}.
+
+{age_profile}
 
 CRITICAL: Generate ALL questions STRICTLY based on the book content provided.
 Do NOT use generic examples or placeholder text like [specific story name].
 Every single question must reference actual topics from the book.
+Follow the age profile above strictly when setting question difficulty and format.
 
 Generate questions for ALL 6 levels:
 1. REMEMBERING - 3 questions (recall facts FROM THE BOOK)
@@ -322,7 +391,6 @@ Generate questions for ALL 6 levels:
 6. CREATING - 3 questions (create based on THE BOOK)
 
 Each level: include parent activity + difficulty (Easy/Medium/Hard)
-Age-appropriate for {age} year old in {grade}.
 Respond in {language}."""
 
                 if pdf_text:
