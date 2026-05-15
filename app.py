@@ -124,6 +124,46 @@ ADVANCED LEARNER (Age 12-15):
 """
 
 def call_ai(prompt, image_b64=None):
+    # Try Gemma 4 with retry
+    google_key = os.getenv("GOOGLE_API_KEY")
+    if google_key:
+        try:
+            from google import genai
+            from google.genai import types
+            import time
+            g_client = genai.Client(api_key=google_key)
+
+            for model in ["gemma-4-31b-it", "gemma-4-26b-a4b-it"]:
+                for attempt in range(3):
+                    try:
+                        if image_b64:
+                            response = g_client.models.generate_content(
+                                model=model,
+                                contents=[
+                                    types.Part.from_bytes(
+                                        data=base64.b64decode(image_b64),
+                                        mime_type="image/jpeg"
+                                    ),
+                                    types.Part.from_text(text=prompt)
+                                ]
+                            )
+                        else:
+                            response = g_client.models.generate_content(
+                                model=model,
+                                contents=prompt
+                            )
+                        st.sidebar.success(f"✅ Powered by {model}")
+                        return response.text
+                    except Exception:
+                        if attempt < 2:
+                            time.sleep(2 ** attempt)
+                        continue
+        except Exception:
+            pass
+
+    st.sidebar.info("ℹ️ Using backup AI model")
+
+    # Fallback to Groq
     if image_b64:
         response = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -244,7 +284,7 @@ if 'last_file_name' not in st.session_state:
 
 # --- SIDEBAR ---
 st.sidebar.header("👤 Child Profile")
-name = st.sidebar.text_input("Child's Name", value="Priya")
+name = st.sidebar.text_input("Child's Name", placeholder="Enter child's name")
 age = st.sidebar.number_input("Age", min_value=4, max_value=18, value=8)
 grade = st.sidebar.selectbox("Class", ["Class 1","Class 2","Class 3","Class 4",
                                         "Class 5","Class 6","Class 7","Class 8"], index=2)
