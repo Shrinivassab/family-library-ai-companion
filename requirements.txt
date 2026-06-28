@@ -1,6 +1,7 @@
 streamlit
 groq
+google-generativeai
 pillow
 pymupdf
-reportlab==3.6.13
+reportlab==5.0.0
 python-dotenv
