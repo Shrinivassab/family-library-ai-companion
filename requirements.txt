@@ -5,3 +5,4 @@ pillow
 pymupdf
 reportlab==5.0.0
 python-dotenv
+streamlit-analytics2

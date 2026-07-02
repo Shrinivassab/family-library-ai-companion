@@ -8,7 +8,6 @@ if sys.version_info < (3, 9):
     hashlib.md5 = _patched_md5
 
 import streamlit as st
-import streamlit.components.v1 as components
 from groq import Groq
 import httpx
 import base64
@@ -18,6 +17,7 @@ import json
 import re
 import time
 from datetime import date
+from pathlib import Path
 from dotenv import load_dotenv
 import fitz
 from reportlab.lib.pagesizes import letter
@@ -27,14 +27,12 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+import streamlit_analytics2 as streamlit_analytics
 
 # --- CONFIG ---
-
-from pathlib import Path
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 API_KEY = os.getenv("GROQ_API_KEY")
-# Use a custom httpx client to bypass SSL verification issues in corporate/proxy environments
 client = Groq(api_key=API_KEY, http_client=httpx.Client(verify=False))
 
 # --- FONT SETUP ---
@@ -130,6 +128,7 @@ ADVANCED LEARNER (Age 12-15):
 """
 
 def call_ai(prompt, image_b64=None):
+    """Primary: Gemma 4 via Google GenAI. Fallback: Groq Llama."""
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key:
         try:
@@ -275,123 +274,170 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
     buffer.seek(0)
     return buffer
 
-# --- PAGE SETUP ---
+# ═══════════════════════════════════════════════
+# PAGE SETUP — must be first Streamlit call
+# ═══════════════════════════════════════════════
 st.set_page_config(page_title="Family Library AI Companion", page_icon="📚", layout="wide")
 
-# PWA Support
-pwa_html = """
+with streamlit_analytics.track():
+
+    # --- PWA SUPPORT ---
+    st.markdown("""
+<head>
 <link rel="manifest" href="/app/static/manifest.json">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Family Library">
 <meta name="theme-color" content="#1f77b4">
-"""
-st.markdown(f'<head>{pwa_html}</head>', unsafe_allow_html=True)
+</head>
+""", unsafe_allow_html=True)
 
-# Google Analytics
-GA_ID = os.getenv("GA_MEASUREMENT_ID", "")
-print(f"GA_ID loaded: {GA_ID if GA_ID else 'NOT FOUND'}")
-if GA_ID:
-    components.html(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){{dataLayer.push(arguments);}}
-      gtag('js', new Date());
-      gtag('config', '{GA_ID}', {{
-        'page_title': 'Family Library AI Companion',
-        'page_location': 'https://family-library.streamlit.app'
-      }});
-    </script>
-    </head>
-    <body></body>
-    </html>
-    """, height=0)
-
-st.markdown("""
+    # --- MOBILE FRIENDLY CSS ---
+    st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-    [data-testid="stSidebar"] { padding-top: 1rem; }
+    [data-testid="stSidebar"] { padding-top: 1rem; min-width: 280px; }
+    /* Camera input styling */
+    .stCameraInput > div {
+        border: 2px dashed #1f77b4;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    .stCameraInput button {
+        background-color: #1f77b4 !important;
+        color: white !important;
+        font-size: 16px !important;
+        padding: 12px 24px !important;
+        border-radius: 8px !important;
+        width: 100% !important;
+    }
+    /* Mobile friendly buttons */
+    .stButton > button {
+        width: 100%;
+        padding: 12px;
+        font-size: 15px;
+        border-radius: 8px;
+    }
+    /* Better tab styling */
+    .stTabs [data-baseweb="tab"] {
+        font-size: 14px;
+        padding: 8px 12px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📚 Family Library AI Companion")
-st.write("Personalized learning for every child — Powered by AI")
+    st.title("📚 Family Library AI Companion")
+    st.write("Personalized learning for every child — Powered by AI")
 
-# --- SESSION STATE ---
-defaults = {
-    'plan_text': None,
-    'blooms_text': None,
-    'pdf_text_cache': None,
-    'image_b64_cache': None,
-    'file_type_cache': None,
-    'last_file_name': None,
-    'roadmap_text': None,
-    'test_questions': None,
-    'test_answers': {},
-    'test_submitted': False,
-    'test_start_time': None,
-    'test_active': False,
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    # --- SESSION STATE ---
+    defaults = {
+        'plan_text': None,
+        'blooms_text': None,
+        'pdf_text_cache': None,
+        'image_b64_cache': None,
+        'file_type_cache': None,
+        'last_file_name': None,
+        'last_camera_photo': None,
+        'roadmap_text': None,
+        'test_questions': None,
+        'test_answers': {},
+        'test_submitted': False,
+        'test_start_time': None,
+        'test_active': False,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-# --- SIDEBAR ---
-st.sidebar.header("👤 Child Profile")
-name = st.sidebar.text_input("Child's Name", placeholder="Enter child's name")
-age = st.sidebar.number_input("Age", min_value=4, max_value=18, value=8)
-grade = st.sidebar.selectbox("Class", ["Class 1","Class 2","Class 3","Class 4",
-                                        "Class 5","Class 6","Class 7","Class 8"], index=2)
-language = st.sidebar.selectbox("Preferred Language", ["English", "Tamil"])
+    # ═══════════════════════════════════════════════
+    # SIDEBAR
+    # ═══════════════════════════════════════════════
+    st.sidebar.header("👤 Child Profile")
+    name = st.sidebar.text_input("Child's Name", placeholder="Enter child's name")
+    age = st.sidebar.number_input("Age", min_value=4, max_value=18, value=8)
+    grade = st.sidebar.selectbox("Class", ["Class 1","Class 2","Class 3","Class 4",
+                                            "Class 5","Class 6","Class 7","Class 8"], index=2)
+    language = st.sidebar.selectbox("Preferred Language", ["English", "Tamil"])
 
-st.sidebar.header("📖 Upload Book")
-uploaded_file = st.sidebar.file_uploader(
-    "Photo or PDF of book",
-    type=["jpg", "jpeg", "png", "pdf"]
-)
-
-if uploaded_file is not None:
-    if uploaded_file.name != st.session_state.last_file_name:
-        pdf_text, image_b64, file_type = process_uploaded_file(uploaded_file)
-        st.session_state.pdf_text_cache = pdf_text
-        st.session_state.image_b64_cache = image_b64
-        st.session_state.file_type_cache = file_type
-        st.session_state.last_file_name = uploaded_file.name
-        # Clear all generated content on new upload
-        st.session_state.plan_text = None
-        st.session_state.blooms_text = None
-        st.session_state.roadmap_text = None
-        st.session_state.test_questions = None
-        st.session_state.test_answers = {}
-        st.session_state.test_submitted = False
-        st.session_state.test_start_time = None
-        st.session_state.test_active = False
-else:
-    if st.session_state.last_file_name:
-        st.sidebar.info("Using previously loaded book")
-
-if st.session_state.last_file_name:
-    st.sidebar.info(f"📚 Book: {st.session_state.last_file_name}")
-
-def get_book_content():
-    return (
-        st.session_state.pdf_text_cache,
-        st.session_state.image_b64_cache,
-        st.session_state.file_type_cache
+    # --- FILE UPLOAD ---
+    st.sidebar.header("📖 Upload Book")
+    uploaded_file = st.sidebar.file_uploader(
+        "Photo or PDF of book",
+        type=["jpg", "jpeg", "png", "pdf"]
     )
 
-# --- WELCOME MESSAGE ---
-if not st.session_state.last_file_name:
-    st.info("""
+    if uploaded_file is not None:
+        if uploaded_file.name != st.session_state.last_file_name:
+            pdf_text, image_b64, file_type = process_uploaded_file(uploaded_file)
+            st.session_state.pdf_text_cache = pdf_text
+            st.session_state.image_b64_cache = image_b64
+            st.session_state.file_type_cache = file_type
+            st.session_state.last_file_name = uploaded_file.name
+            st.session_state.last_camera_photo = None
+            # Clear all generated content on new upload
+            st.session_state.plan_text = None
+            st.session_state.blooms_text = None
+            st.session_state.roadmap_text = None
+            st.session_state.test_questions = None
+            st.session_state.test_answers = {}
+            st.session_state.test_submitted = False
+            st.session_state.test_start_time = None
+            st.session_state.test_active = False
+    else:
+        if st.session_state.last_file_name and not st.session_state.last_camera_photo:
+            st.sidebar.info("Using previously loaded book")
+
+    if st.session_state.last_file_name:
+        st.sidebar.info(f"📚 Book: {st.session_state.last_file_name}")
+
+    # --- CAMERA CAPTURE ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📷 Or Take a Photo")
+    st.sidebar.caption("Point your camera at any book page")
+    camera_photo = st.sidebar.camera_input(
+        "Take a photo of the book",
+        help="Point camera at book cover or any page"
+    )
+
+    if camera_photo is not None:
+        if st.session_state.last_camera_photo != camera_photo:
+            st.session_state.last_camera_photo = camera_photo
+            camera_bytes = camera_photo.getvalue()
+            image_b64 = base64.b64encode(camera_bytes).decode('utf-8')
+            st.session_state.image_b64_cache = image_b64
+            st.session_state.file_type_cache = "image"
+            st.session_state.pdf_text_cache = None
+            st.session_state.last_file_name = None
+            # Clear all generated content on new capture
+            st.session_state.plan_text = None
+            st.session_state.blooms_text = None
+            st.session_state.roadmap_text = None
+            st.session_state.test_questions = None
+            st.session_state.test_answers = {}
+            st.session_state.test_submitted = False
+            st.session_state.test_start_time = None
+            st.session_state.test_active = False
+            st.sidebar.success("📸 Book photo captured! Now click Generate Reading Plan.")
+            st.sidebar.image(camera_bytes, caption="Your book photo", use_container_width=True)
+
+    def get_book_content():
+        return (
+            st.session_state.pdf_text_cache,
+            st.session_state.image_b64_cache,
+            st.session_state.file_type_cache
+        )
+
+    def has_book():
+        return st.session_state.last_file_name or st.session_state.last_camera_photo
+
+    # --- WELCOME MESSAGE ---
+    if not has_book():
+        st.info("""
     👋 **Welcome! Here's how to use this app:**
 
     1. 👤 Enter child's name, age and class in the **left sidebar**
-    2. 📖 Upload a **book photo or PDF** in the sidebar
+    2. 📖 Upload a **book photo or PDF** — or use 📷 **Take a Photo** in the sidebar
     3. 📅 **Reading Plan** tab — Get a 7-day personalized reading plan
     4. 🧠 **Bloom's Questions** tab — Deep learning questions at all 6 levels
     5. 🗺️ **Concept Roadmap** tab — Visual step-by-step learning pathway
@@ -399,30 +445,30 @@ if not st.session_state.last_file_name:
     7. 📄 **Download Report** tab — Parent Report Card PDF
     """)
 
-# --- TABS ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📅 Reading Plan",
-    "🧠 Bloom's Questions",
-    "🗺️ Concept Roadmap",
-    "📝 Self Analysis Test",
-    "📄 Download Report",
-])
+    # --- TABS ---
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📅 Reading Plan",
+        "🧠 Bloom's Questions",
+        "🗺️ Concept Roadmap",
+        "📝 Self Analysis Test",
+        "📄 Download Report",
+    ])
 
-# ═══════════════════════════════════════════════
-# TAB 1 — READING PLAN
-# ═══════════════════════════════════════════════
-with tab1:
-    st.header("Generate 7-Day Reading Plan")
+    # ═══════════════════════════════════════════════
+    # TAB 1 — READING PLAN
+    # ═══════════════════════════════════════════════
+    with tab1:
+        st.header("Generate 7-Day Reading Plan")
 
-    if st.button("🚀 Generate Reading Plan", key="gen_plan"):
-        if not name:
-            st.warning("Please enter the child's name in the sidebar!")
-        else:
-            with st.spinner("Creating personalized reading plan..."):
-                pdf_text, image_b64, file_type = get_book_content()
-                age_profile = get_age_profile(age, grade)
+        if st.button("🚀 Generate Reading Plan", key="gen_plan"):
+            if not name:
+                st.warning("Please enter the child's name in the sidebar!")
+            else:
+                with st.spinner("Creating personalized reading plan..."):
+                    pdf_text, image_b64, file_type = get_book_content()
+                    age_profile = get_age_profile(age, grade)
 
-                base_prompt = f"""You are an educational AI for rural Indian students.
+                    base_prompt = f"""You are an educational AI for rural Indian students.
 A child named {name}, age {age}, in {grade}, prefers {language}.
 
 {age_profile}
@@ -436,8 +482,8 @@ Include:
 Format clearly for a parent to understand.
 Respond in {language}."""
 
-                if pdf_text:
-                    prompt = f"""The following is ACTUAL content from a real textbook.
+                    if pdf_text:
+                        prompt = f"""The following is ACTUAL content from a real textbook.
 Use ONLY this content to create the reading plan.
 Do NOT invent stories or use other books.
 
@@ -446,60 +492,52 @@ Do NOT invent stories or use other books.
 ===END===
 
 {base_prompt}"""
-                elif image_b64:
-                    prompt = f"""This is a page from a Tamil Nadu government school textbook.
+                    elif image_b64:
+                        prompt = f"""This is a page from a Tamil Nadu government school textbook.
 Look carefully at ALL the text, topics, lessons, and content visible in this image.
 Identify the specific subject, chapter names, and key concepts shown.
 Use ONLY the actual content visible — specific lesson names, topics, exercises.
 Do NOT talk about cover pages, index pages, or generic book structure.
 
 {base_prompt}"""
-                else:
-                    prompt = base_prompt
+                    else:
+                        prompt = base_prompt
 
-                st.session_state.plan_text = call_ai(prompt, image_b64)
-                st.success("✅ Reading plan generated!")
-                if GA_ID:
-                    st.markdown(f"""<script>
-gtag('event', 'reading_plan_generated', {{
-  'child_grade': '{grade}',
-  'language': '{language}',
-  'file_type': '{st.session_state.get("file_type_cache", "none")}'
-}});
-</script>""", unsafe_allow_html=True)
+                    st.session_state.plan_text = call_ai(prompt, image_b64)
+                    st.success("✅ Reading plan generated!")
 
-    if st.session_state.plan_text:
-        st.markdown(st.session_state.plan_text)
+        if st.session_state.plan_text:
+            st.markdown(st.session_state.plan_text)
 
-# ═══════════════════════════════════════════════
-# TAB 2 — BLOOM'S QUESTIONS
-# ═══════════════════════════════════════════════
-with tab2:
-    st.header("🧠 Bloom's Taxonomy Question Generator")
-    st.write("Generates questions at all 6 thinking levels for deeper learning")
+    # ═══════════════════════════════════════════════
+    # TAB 2 — BLOOM'S QUESTIONS
+    # ═══════════════════════════════════════════════
+    with tab2:
+        st.header("🧠 Bloom's Taxonomy Question Generator")
+        st.write("Generates questions at all 6 thinking levels for deeper learning")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.info("🔵 **Level 1** Remembering\n\nRecall facts and basic concepts")
-        st.info("🟢 **Level 2** Understanding\n\nExplain ideas in own words")
-    with col2:
-        st.info("🟡 **Level 3** Applying\n\nUse knowledge in new situations")
-        st.info("🟠 **Level 4** Analyzing\n\nDraw connections and find patterns")
-    with col3:
-        st.info("🔴 **Level 5** Evaluating\n\nJustify decisions and opinions")
-        st.info("🟣 **Level 6** Creating\n\nProduce new or original work")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.info("🔵 **Level 1** Remembering\n\nRecall facts and basic concepts")
+            st.info("🟢 **Level 2** Understanding\n\nExplain ideas in own words")
+        with col2:
+            st.info("🟡 **Level 3** Applying\n\nUse knowledge in new situations")
+            st.info("🟠 **Level 4** Analyzing\n\nDraw connections and find patterns")
+        with col3:
+            st.info("🔴 **Level 5** Evaluating\n\nJustify decisions and opinions")
+            st.info("🟣 **Level 6** Creating\n\nProduce new or original work")
 
-    st.divider()
+        st.divider()
 
-    if st.button("🧠 Generate Bloom's Questions", key="gen_blooms"):
-        if not name:
-            st.warning("Please enter the child's name in the sidebar!")
-        else:
-            with st.spinner("Generating Bloom's Taxonomy questions..."):
-                pdf_text, image_b64, file_type = get_book_content()
-                age_profile = get_age_profile(age, grade)
+        if st.button("🧠 Generate Bloom's Questions", key="gen_blooms"):
+            if not name:
+                st.warning("Please enter the child's name in the sidebar!")
+            else:
+                with st.spinner("Generating Bloom's Taxonomy questions..."):
+                    pdf_text, image_b64, file_type = get_book_content()
+                    age_profile = get_age_profile(age, grade)
 
-                blooms_prompt = f"""You are an expert educational psychologist using Bloom's Taxonomy.
+                    blooms_prompt = f"""You are an expert educational psychologist using Bloom's Taxonomy.
 A child named {name}, age {age}, in {grade}, prefers {language}.
 
 {age_profile}
@@ -520,8 +558,8 @@ Generate questions for ALL 6 levels:
 Each level: include parent activity + difficulty (Easy/Medium/Hard)
 Respond in {language}."""
 
-                if pdf_text:
-                    blooms_prompt = f"""ACTUAL textbook content below. Use ONLY this.
+                    if pdf_text:
+                        blooms_prompt = f"""ACTUAL textbook content below. Use ONLY this.
 Do NOT use placeholder text like [specific story name from the book].
 
 ===BOOK CONTENT===
@@ -529,34 +567,27 @@ Do NOT use placeholder text like [specific story name from the book].
 ===END===
 
 {blooms_prompt}"""
-                elif image_b64:
-                    blooms_prompt = f"""Look at this book image carefully.
+                    elif image_b64:
+                        blooms_prompt = f"""Look at this book image carefully.
 Use ONLY what you see in this book. No placeholders.
 
 {blooms_prompt}"""
 
-                st.session_state.blooms_text = call_ai(blooms_prompt, image_b64)
-                st.success("✅ Bloom's questions generated!")
-                if GA_ID:
-                    st.markdown(f"""<script>
-gtag('event', 'blooms_questions_generated', {{
-  'child_grade': '{grade}',
-  'language': '{language}'
-}});
-</script>""", unsafe_allow_html=True)
+                    st.session_state.blooms_text = call_ai(blooms_prompt, image_b64)
+                    st.success("✅ Bloom's questions generated!")
 
-    if st.session_state.blooms_text:
-        st.markdown(st.session_state.blooms_text)
+        if st.session_state.blooms_text:
+            st.markdown(st.session_state.blooms_text)
 
-# ═══════════════════════════════════════════════
-# TAB 3 — CONCEPT ROADMAP
-# ═══════════════════════════════════════════════
-with tab3:
-    st.header("🗺️ AI Concept Roadmap")
-    st.write("A structured learning pathway from basic to advanced concepts")
-    st.caption("Designed by S. Sivakumar, Former Principal, DIET Kancheepuram")
+    # ═══════════════════════════════════════════════
+    # TAB 3 — CONCEPT ROADMAP
+    # ═══════════════════════════════════════════════
+    with tab3:
+        st.header("🗺️ AI Concept Roadmap")
+        st.write("A structured learning pathway from basic to advanced concepts")
+        st.caption("Designed by S. Sivakumar, Former Principal, DIET Kancheepuram")
 
-    st.info("""
+        st.info("""
 **What is a Concept Roadmap?**
 A step-by-step sequence that guides students from the most basic idea to advanced understanding.
 Each step builds logically on the previous one.
@@ -565,16 +596,16 @@ Each step builds logically on the previous one.
 Introduction → Location → External Structure → Internal Structure → Chambers → Valves → Blood Vessels → Blood Circulation → Functions → Application to Health
     """)
 
-    if st.button("🗺️ Generate Concept Roadmap", key="gen_roadmap"):
-        if not name:
-            st.warning("Please enter the child's name in the sidebar!")
-        elif not st.session_state.last_file_name:
-            st.warning("Please upload a book first!")
-        else:
-            with st.spinner("Analyzing content and building learning roadmap..."):
-                pdf_text, image_b64, file_type = get_book_content()
+        if st.button("🗺️ Generate Concept Roadmap", key="gen_roadmap"):
+            if not name:
+                st.warning("Please enter the child's name in the sidebar!")
+            elif not has_book():
+                st.warning("Please upload a book or take a photo first!")
+            else:
+                with st.spinner("Analyzing content and building learning roadmap..."):
+                    pdf_text, image_b64, file_type = get_book_content()
 
-                roadmap_prompt = f"""You are an expert educational designer. Analyze this book content and create a structured learning roadmap. Start from the most basic foundational concept and sequence all concepts logically so each step builds on the previous one. This is for a child named {name}, age {age}, grade {grade}. Respond in {language}.
+                    roadmap_prompt = f"""You are an expert educational designer. Analyze this book content and create a structured learning roadmap. Start from the most basic foundational concept and sequence all concepts logically so each step builds on the previous one. This is for a child named {name}, age {age}, grade {grade}. Respond in {language}.
 
 Format EACH step EXACTLY like this (do not deviate):
 
@@ -584,63 +615,62 @@ Format EACH step EXACTLY like this (do not deviate):
 
 Generate between 8 and 12 steps, moving from foundational to advanced. Do not add any text before Step 1 or after the final step."""
 
-                if pdf_text:
-                    roadmap_prompt = f"""===BOOK CONTENT===
+                    if pdf_text:
+                        roadmap_prompt = f"""===BOOK CONTENT===
 {pdf_text}
 ===END===
 
 {roadmap_prompt}"""
-                elif image_b64:
-                    roadmap_prompt = f"""Look at this book image carefully and identify all the concepts present.
+                    elif image_b64:
+                        roadmap_prompt = f"""Look at this book image carefully and identify all the concepts present.
 
 {roadmap_prompt}"""
 
-                st.session_state.roadmap_text = call_ai(roadmap_prompt, image_b64)
-                st.success("✅ Concept roadmap generated!")
+                    st.session_state.roadmap_text = call_ai(roadmap_prompt, image_b64)
+                    st.success("✅ Concept roadmap generated!")
 
-    if st.session_state.roadmap_text:
-        st.divider()
-        st.subheader("📍 Your Learning Pathway")
+        if st.session_state.roadmap_text:
+            st.divider()
+            st.subheader("📍 Your Learning Pathway")
 
-        # Parse the AI response into step blocks
-        lines = st.session_state.roadmap_text.strip().split('\n')
-        step_blocks = []
-        current_block = []
+            lines = st.session_state.roadmap_text.strip().split('\n')
+            step_blocks = []
+            current_block = []
 
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if re.match(r'\*{0,2}(Step|படி)\s*\d+', line, re.IGNORECASE):
-                if current_block:
-                    step_blocks.append(current_block)
-                current_block = [line]
-            else:
-                current_block.append(line)
-        if current_block:
-            step_blocks.append(current_block)
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                if re.match(r'\*{0,2}(Step|படி)\s*\d+', line, re.IGNORECASE):
+                    if current_block:
+                        step_blocks.append(current_block)
+                    current_block = [line]
+                else:
+                    current_block.append(line)
+            if current_block:
+                step_blocks.append(current_block)
 
-        bg_colors = [
-            '#e8f4fd', '#e8f7e8', '#fff3e0', '#fce4ec', '#f3e5f5',
-            '#e0f2f1', '#fff8e1', '#e8eaf6', '#f1f8e9', '#fbe9e7', '#e3f2fd', '#f9fbe7',
-        ]
-        border_colors = [
-            '#2e86c1', '#27ae60', '#f39c12', '#c0392b', '#8e44ad',
-            '#16a085', '#f57f17', '#3949ab', '#558b2f', '#bf360c', '#1565c0', '#827717',
-        ]
+            bg_colors = [
+                '#e8f4fd', '#e8f7e8', '#fff3e0', '#fce4ec', '#f3e5f5',
+                '#e0f2f1', '#fff8e1', '#e8eaf6', '#f1f8e9', '#fbe9e7', '#e3f2fd', '#f9fbe7',
+            ]
+            border_colors = [
+                '#2e86c1', '#27ae60', '#f39c12', '#c0392b', '#8e44ad',
+                '#16a085', '#f57f17', '#3949ab', '#558b2f', '#bf360c', '#1565c0', '#827717',
+            ]
 
-        if len(step_blocks) >= 2:
-            for i, block in enumerate(step_blocks):
-                bg = bg_colors[i % len(bg_colors)]
-                border = border_colors[i % len(border_colors)]
+            if len(step_blocks) >= 2:
+                for i, block in enumerate(step_blocks):
+                    bg = bg_colors[i % len(bg_colors)]
+                    border = border_colors[i % len(border_colors)]
 
-                html_lines = []
-                for raw_line in block:
-                    raw_line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', raw_line)
-                    html_lines.append(raw_line)
-                block_html = '<br>'.join(html_lines)
+                    html_lines = []
+                    for raw_line in block:
+                        raw_line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', raw_line)
+                        html_lines.append(raw_line)
+                    block_html = '<br>'.join(html_lines)
 
-                st.markdown(f"""
+                    st.markdown(f"""
 <div style="
     background: {bg};
     border-left: 5px solid {border};
@@ -654,75 +684,75 @@ Generate between 8 and 12 steps, moving from foundational to advanced. Do not ad
 </div>
 """, unsafe_allow_html=True)
 
-                if i < len(step_blocks) - 1:
-                    st.markdown("""
+                    if i < len(step_blocks) - 1:
+                        st.markdown("""
 <div style="text-align:center; font-size:28px; color:#888; margin:2px 0;">↓</div>
 """, unsafe_allow_html=True)
-        else:
-            st.markdown(st.session_state.roadmap_text)
-
-# ═══════════════════════════════════════════════
-# TAB 4 — SELF ANALYSIS TEST
-# ═══════════════════════════════════════════════
-BLOOMS_DISTRIBUTION = {
-    "Remembering": 4,
-    "Understanding": 3,
-    "Applying": 3,
-    "Analyzing": 2,
-    "Evaluating": 2,
-    "Creating": 1,
-}
-BLOOMS_EMOJI = {
-    "Remembering": "🔵", "Understanding": "🟢", "Applying": "🟡",
-    "Analyzing": "🟠", "Evaluating": "🔴", "Creating": "🟣",
-}
-BLOOMS_TIPS = {
-    "Remembering": "Re-read the chapter and make flashcards for key facts.",
-    "Understanding": "Explain the topic in your own words to a parent.",
-    "Applying": "Practice similar problems from the textbook exercises.",
-    "Analyzing": "Draw diagrams and compare concepts to find connections.",
-    "Evaluating": "Discuss: 'What do you think about...?' with a parent.",
-    "Creating": "Write a short story or make a project using what you learned.",
-}
-TEST_DURATION = 900  # 15 minutes in seconds
-
-with tab4:
-    st.header("📝 Self Analysis Test")
-    st.write("15 MCQ questions from your book content — 15 minute timed test")
-    st.caption("Designed by S. Sivakumar, Former Principal, DIET Kancheepuram")
-
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.metric("🔵 Remembering", "4 Qs")
-        st.metric("🟢 Understanding", "3 Qs")
-    with col_b:
-        st.metric("🟡 Applying", "3 Qs")
-        st.metric("🟠 Analyzing", "2 Qs")
-    with col_c:
-        st.metric("🔴 Evaluating", "2 Qs")
-        st.metric("🟣 Creating", "1 Q")
-
-    st.divider()
-
-    # ── GENERATE & START ──
-    if not st.session_state.test_active:
-        if st.button("🎯 Generate & Start Test", key="gen_test", type="primary"):
-            if not name:
-                st.warning("Please enter the child's name in the sidebar!")
-            elif not st.session_state.last_file_name:
-                st.warning("Please upload a book first!")
             else:
-                with st.spinner("Generating 15 MCQ questions..."):
-                    pdf_text, image_b64, file_type = get_book_content()
+                st.markdown(st.session_state.roadmap_text)
 
-                    content_for_prompt = pdf_text if pdf_text else (
-                        "Use the book content visible in this image" if image_b64 else
-                        "General grade-appropriate content"
-                    )
+    # ═══════════════════════════════════════════════
+    # TAB 4 — SELF ANALYSIS TEST
+    # ═══════════════════════════════════════════════
+    BLOOMS_DISTRIBUTION = {
+        "Remembering": 4,
+        "Understanding": 3,
+        "Applying": 3,
+        "Analyzing": 2,
+        "Evaluating": 2,
+        "Creating": 1,
+    }
+    BLOOMS_EMOJI = {
+        "Remembering": "🔵", "Understanding": "🟢", "Applying": "🟡",
+        "Analyzing": "🟠", "Evaluating": "🔴", "Creating": "🟣",
+    }
+    BLOOMS_TIPS = {
+        "Remembering": "Re-read the chapter and make flashcards for key facts.",
+        "Understanding": "Explain the topic in your own words to a parent.",
+        "Applying": "Practice similar problems from the textbook exercises.",
+        "Analyzing": "Draw diagrams and compare concepts to find connections.",
+        "Evaluating": "Discuss: 'What do you think about...?' with a parent.",
+        "Creating": "Write a short story or make a project using what you learned.",
+    }
+    TEST_DURATION = 900  # 15 minutes in seconds
 
-                    today = date.today().isoformat()
+    with tab4:
+        st.header("📝 Self Analysis Test")
+        st.write("15 MCQ questions from your book content — 15 minute timed test")
+        st.caption("Designed by S. Sivakumar, Former Principal, DIET Kancheepuram")
 
-                    test_prompt = f"""You are an expert educational psychologist. Generate exactly 15 MCQ questions from this content using Bloom's Taxonomy distribution: Remembering(4), Understanding(3), Applying(3), Analyzing(2), Evaluating(2), Creating(1). Each question must have 4 options A/B/C/D. Return as JSON array with fields: question, options(array of 4 strings), correct_answer(one of "A","B","C","D"), blooms_level, difficulty(Easy/Medium/Hard). Make questions randomized and different each time. Today's date is {today} — use this to ensure variety across days. Content: {content_for_prompt}. Child: {name}, age {age}, {grade}. Language: {language}. Return JSON only, no other text.
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("🔵 Remembering", "4 Qs")
+            st.metric("🟢 Understanding", "3 Qs")
+        with col_b:
+            st.metric("🟡 Applying", "3 Qs")
+            st.metric("🟠 Analyzing", "2 Qs")
+        with col_c:
+            st.metric("🔴 Evaluating", "2 Qs")
+            st.metric("🟣 Creating", "1 Q")
+
+        st.divider()
+
+        # ── GENERATE & START ──
+        if not st.session_state.test_active:
+            if st.button("🎯 Generate & Start Test", key="gen_test", type="primary"):
+                if not name:
+                    st.warning("Please enter the child's name in the sidebar!")
+                elif not has_book():
+                    st.warning("Please upload a book or take a photo first!")
+                else:
+                    with st.spinner("Generating 15 MCQ questions..."):
+                        pdf_text, image_b64, file_type = get_book_content()
+
+                        content_for_prompt = pdf_text if pdf_text else (
+                            "Use the book content visible in this image" if image_b64 else
+                            "General grade-appropriate content"
+                        )
+
+                        today = date.today().isoformat()
+
+                        test_prompt = f"""You are an expert educational psychologist. Generate exactly 15 MCQ questions from this content using Bloom's Taxonomy distribution: Remembering(4), Understanding(3), Applying(3), Analyzing(2), Evaluating(2), Creating(1). Each question must have 4 options A/B/C/D. Return as JSON array with fields: question, options(array of 4 strings), correct_answer(one of "A","B","C","D"), blooms_level, difficulty(Easy/Medium/Hard). Make questions randomized and different each time. Today's date is {today} — use this to ensure variety across days. Content: {content_for_prompt}. Child: {name}, age {age}, {grade}. Language: {language}. Return JSON only, no other text.
 
 Example format:
 [
@@ -735,36 +765,36 @@ Example format:
   }}
 ]"""
 
-                    raw = call_ai(test_prompt, image_b64)
+                        raw = call_ai(test_prompt, image_b64)
 
-                    try:
-                        questions = parse_mcq_json(raw)
-                        if not isinstance(questions, list) or len(questions) < 5:
-                            st.error("AI returned too few questions. Please try again.")
-                            st.stop()
-                        st.session_state.test_questions = questions[:15]
-                        st.session_state.test_answers = {}
-                        st.session_state.test_submitted = False
-                        st.session_state.test_start_time = time.time()
-                        st.session_state.test_active = True
-                        st.rerun()
-                    except (json.JSONDecodeError, ValueError):
-                        st.error("Could not parse questions from AI. Please try again.")
-                        with st.expander("Raw AI response"):
-                            st.text(raw)
+                        try:
+                            questions = parse_mcq_json(raw)
+                            if not isinstance(questions, list) or len(questions) < 5:
+                                st.error("AI returned too few questions. Please try again.")
+                                st.stop()
+                            st.session_state.test_questions = questions[:15]
+                            st.session_state.test_answers = {}
+                            st.session_state.test_submitted = False
+                            st.session_state.test_start_time = time.time()
+                            st.session_state.test_active = True
+                            st.rerun()
+                        except (json.JSONDecodeError, ValueError):
+                            st.error("Could not parse questions from AI. Please try again.")
+                            with st.expander("Raw AI response"):
+                                st.text(raw)
 
-    # ── ACTIVE TEST ──
-    if st.session_state.test_active and st.session_state.test_questions:
-        questions = st.session_state.test_questions
+        # ── ACTIVE TEST ──
+        if st.session_state.test_active and st.session_state.test_questions:
+            questions = st.session_state.test_questions
 
-        if not st.session_state.test_submitted:
-            # Timer display
-            elapsed = time.time() - st.session_state.test_start_time
-            remaining = max(0, TEST_DURATION - int(elapsed))
-            mins, secs = divmod(remaining, 60)
-            timer_color = "#c0392b" if remaining < 120 else "#27ae60"
+            if not st.session_state.test_submitted:
+                # Timer display
+                elapsed = time.time() - st.session_state.test_start_time
+                remaining = max(0, TEST_DURATION - int(elapsed))
+                mins, secs = divmod(remaining, 60)
+                timer_color = "#c0392b" if remaining < 120 else "#27ae60"
 
-            st.markdown(f"""
+                st.markdown(f"""
 <div style="
     background:{timer_color};
     color:white;
@@ -779,85 +809,78 @@ Example format:
 </div>
 """, unsafe_allow_html=True)
 
-            if remaining == 0:
-                for i in range(len(questions)):
-                    val = st.session_state.get(f"q_{i}")
-                    if val:
-                        st.session_state.test_answers[i] = val[0]
-                st.session_state.test_submitted = True
-                st.rerun()
+                if remaining == 0:
+                    for i in range(len(questions)):
+                        val = st.session_state.get(f"q_{i}")
+                        if val:
+                            st.session_state.test_answers[i] = val[0]
+                    st.session_state.test_submitted = True
+                    st.rerun()
 
-            # Questions
-            st.subheader(f"Answer all {len(questions)} questions:")
+                st.subheader(f"Answer all {len(questions)} questions:")
 
-            for i, q in enumerate(questions):
-                blooms = q.get("blooms_level", "")
-                diff = q.get("difficulty", "")
-                emoji = BLOOMS_EMOJI.get(blooms, "⚪")
+                for i, q in enumerate(questions):
+                    blooms = q.get("blooms_level", "")
+                    diff = q.get("difficulty", "")
+                    emoji = BLOOMS_EMOJI.get(blooms, "⚪")
 
-                st.markdown(
-                    f"**Q{i+1}. {q['question']}** &nbsp;&nbsp; {emoji} _{blooms}_ &nbsp;|&nbsp; _{diff}_"
-                )
+                    st.markdown(
+                        f"**Q{i+1}. {q['question']}** &nbsp;&nbsp; {emoji} _{blooms}_ &nbsp;|&nbsp; _{diff}_"
+                    )
 
-                opts = q.get("options", [])
-                labels = [f"{chr(65+j)}) {opt}" for j, opt in enumerate(opts)]
+                    opts = q.get("options", [])
+                    labels = [f"{chr(65+j)}) {opt}" for j, opt in enumerate(opts)]
 
-                selected = st.radio(
-                    f"q{i+1}",
-                    options=labels,
-                    key=f"q_{i}",
-                    label_visibility="collapsed",
-                )
+                    selected = st.radio(
+                        f"q{i+1}",
+                        options=labels,
+                        key=f"q_{i}",
+                        label_visibility="collapsed",
+                    )
 
-                if selected:
-                    st.session_state.test_answers[i] = selected[0]
+                    if selected:
+                        st.session_state.test_answers[i] = selected[0]
 
-                st.divider()
+                    st.divider()
 
-            if st.button("✅ Submit Test", key="submit_test", type="primary"):
-                for i in range(len(questions)):
-                    val = st.session_state.get(f"q_{i}")
-                    if val:
-                        st.session_state.test_answers[i] = val[0]
-                st.session_state.test_submitted = True
-                st.rerun()
+                if st.button("✅ Submit Test", key="submit_test", type="primary"):
+                    for i in range(len(questions)):
+                        val = st.session_state.get(f"q_{i}")
+                        if val:
+                            st.session_state.test_answers[i] = val[0]
+                    st.session_state.test_submitted = True
+                    st.rerun()
 
-        # ── RESULTS ──
-        if st.session_state.test_submitted:
-            if GA_ID:
-                st.markdown("""<script>
-gtag('event', 'self_analysis_test_completed', {
-  'event_category': 'engagement'
-});
-</script>""", unsafe_allow_html=True)
-            questions = st.session_state.test_questions
-            answers = st.session_state.test_answers
+            # ── RESULTS ──
+            if st.session_state.test_submitted:
+                questions = st.session_state.test_questions
+                answers = st.session_state.test_answers
 
-            score = 0
-            weak = {}
-            strong = {}
+                score = 0
+                weak = {}
+                strong = {}
 
-            for i, q in enumerate(questions):
-                correct = q.get("correct_answer", "")
-                given = answers.get(i, "")
-                lvl = q.get("blooms_level", "Unknown")
-                if given == correct:
-                    score += 1
-                    strong[lvl] = strong.get(lvl, 0) + 1
+                for i, q in enumerate(questions):
+                    correct = q.get("correct_answer", "")
+                    given = answers.get(i, "")
+                    lvl = q.get("blooms_level", "Unknown")
+                    if given == correct:
+                        score += 1
+                        strong[lvl] = strong.get(lvl, 0) + 1
+                    else:
+                        weak[lvl] = weak.get(lvl, 0) + 1
+
+                total = len(questions)
+                pct = int((score / total) * 100) if total > 0 else 0
+
+                if pct >= 80:
+                    score_color, grade_label = "#27ae60", "Excellent! 🌟"
+                elif pct >= 60:
+                    score_color, grade_label = "#f39c12", "Good Job! 👍"
                 else:
-                    weak[lvl] = weak.get(lvl, 0) + 1
+                    score_color, grade_label = "#c0392b", "Keep Practising! 💪"
 
-            total = len(questions)
-            pct = int((score / total) * 100) if total > 0 else 0
-
-            if pct >= 80:
-                score_color, grade_label = "#27ae60", "Excellent! 🌟"
-            elif pct >= 60:
-                score_color, grade_label = "#f39c12", "Good Job! 👍"
-            else:
-                score_color, grade_label = "#c0392b", "Keep Practising! 💪"
-
-            st.markdown(f"""
+                st.markdown(f"""
 <div style="
     background:{score_color};
     color:white;
@@ -873,90 +896,84 @@ Score: {score} / {total} &nbsp;({pct}%)
 </div>
 """, unsafe_allow_html=True)
 
-            st.subheader("📊 Performance by Bloom's Level")
-            for lvl in BLOOMS_DISTRIBUTION:
-                right = strong.get(lvl, 0)
-                wrong = weak.get(lvl, 0)
-                lvl_total = right + wrong
-                if lvl_total > 0:
-                    lvl_pct = int((right / lvl_total) * 100)
-                    status = "✅" if lvl_pct >= 60 else "⚠️ Needs work"
-                    emoji = BLOOMS_EMOJI.get(lvl, "")
-                    st.write(f"{emoji} **{lvl}**: {right}/{lvl_total} correct ({lvl_pct}%) {status}")
+                st.subheader("📊 Performance by Bloom's Level")
+                for lvl in BLOOMS_DISTRIBUTION:
+                    right = strong.get(lvl, 0)
+                    wrong = weak.get(lvl, 0)
+                    lvl_total = right + wrong
+                    if lvl_total > 0:
+                        lvl_pct = int((right / lvl_total) * 100)
+                        status = "✅" if lvl_pct >= 60 else "⚠️ Needs work"
+                        emoji = BLOOMS_EMOJI.get(lvl, "")
+                        st.write(f"{emoji} **{lvl}**: {right}/{lvl_total} correct ({lvl_pct}%) {status}")
 
-            if weak:
-                st.subheader("📚 Revision Suggestions")
-                for lvl, count in weak.items():
-                    tip = BLOOMS_TIPS.get(lvl, "Review this topic again.")
-                    emoji = BLOOMS_EMOJI.get(lvl, "")
-                    st.info(f"{emoji} **{lvl}** ({count} wrong): {tip}")
+                if weak:
+                    st.subheader("📚 Revision Suggestions")
+                    for lvl, count in weak.items():
+                        tip = BLOOMS_TIPS.get(lvl, "Review this topic again.")
+                        emoji = BLOOMS_EMOJI.get(lvl, "")
+                        st.info(f"{emoji} **{lvl}** ({count} wrong): {tip}")
 
-            st.subheader("📋 Answer Review")
-            for i, q in enumerate(questions):
-                correct = q.get("correct_answer", "")
-                given = answers.get(i, "")
-                opts = q.get("options", [])
-                letter_to_idx = {"A": 0, "B": 1, "C": 2, "D": 3}
+                st.subheader("📋 Answer Review")
+                for i, q in enumerate(questions):
+                    correct = q.get("correct_answer", "")
+                    given = answers.get(i, "")
+                    opts = q.get("options", [])
+                    letter_to_idx = {"A": 0, "B": 1, "C": 2, "D": 3}
 
-                correct_idx = letter_to_idx.get(correct, 0)
-                correct_text = opts[correct_idx] if correct_idx < len(opts) else correct
+                    correct_idx = letter_to_idx.get(correct, 0)
+                    correct_text = opts[correct_idx] if correct_idx < len(opts) else correct
 
-                if given == correct:
-                    st.success(f"Q{i+1}: ✅ Correct — {correct}) {correct_text}")
-                else:
-                    given_idx = letter_to_idx.get(given, -1)
-                    given_text = opts[given_idx] if 0 <= given_idx < len(opts) else "Not answered"
-                    st.error(
-                        f"Q{i+1}: ❌ You chose {given}) {given_text} | Correct: {correct}) {correct_text}"
+                    if given == correct:
+                        st.success(f"Q{i+1}: ✅ Correct — {correct}) {correct_text}")
+                    else:
+                        given_idx = letter_to_idx.get(given, -1)
+                        given_text = opts[given_idx] if 0 <= given_idx < len(opts) else "Not answered"
+                        st.error(
+                            f"Q{i+1}: ❌ You chose {given}) {given_text} | Correct: {correct}) {correct_text}"
+                        )
+
+                st.divider()
+                if st.button("🔄 Take New Test", key="new_test"):
+                    st.session_state.test_questions = None
+                    st.session_state.test_answers = {}
+                    st.session_state.test_submitted = False
+                    st.session_state.test_start_time = None
+                    st.session_state.test_active = False
+                    st.rerun()
+
+    # ═══════════════════════════════════════════════
+    # TAB 5 — DOWNLOAD REPORT
+    # ═══════════════════════════════════════════════
+    with tab5:
+        st.header("📄 Download Parent Report Card")
+
+        if not st.session_state.plan_text and not st.session_state.blooms_text:
+            st.warning("Please generate a Reading Plan and/or Bloom's Questions first!")
+        else:
+            st.success("Your report is ready to download!")
+            if st.session_state.plan_text:
+                st.write("✅ Reading Plan included")
+            if st.session_state.blooms_text:
+                st.write("✅ Bloom's Taxonomy Questions included")
+
+            if st.button("📄 Generate PDF Report"):
+                with st.spinner("Creating PDF..."):
+                    pdf_buffer = generate_pdf_report(
+                        name, age, grade, language,
+                        st.session_state.plan_text or "",
+                        st.session_state.blooms_text
+                    )
+                    st.download_button(
+                        label="⬇️ Download Report Card PDF",
+                        data=pdf_buffer,
+                        file_name=f"{name}_Family_Library_Report.pdf",
+                        mime="application/pdf"
                     )
 
-            st.divider()
-            if st.button("🔄 Take New Test", key="new_test"):
-                st.session_state.test_questions = None
-                st.session_state.test_answers = {}
-                st.session_state.test_submitted = False
-                st.session_state.test_start_time = None
-                st.session_state.test_active = False
-                st.rerun()
-
-# ═══════════════════════════════════════════════
-# TAB 5 — DOWNLOAD REPORT
-# ═══════════════════════════════════════════════
-with tab5:
-    st.header("📄 Download Parent Report Card")
-
-    if not st.session_state.plan_text and not st.session_state.blooms_text:
-        st.warning("Please generate a Reading Plan and/or Bloom's Questions first!")
-    else:
-        st.success("Your report is ready to download!")
-        if st.session_state.plan_text:
-            st.write("✅ Reading Plan included")
-        if st.session_state.blooms_text:
-            st.write("✅ Bloom's Taxonomy Questions included")
-
-        if st.button("📄 Generate PDF Report"):
-            with st.spinner("Creating PDF..."):
-                pdf_buffer = generate_pdf_report(
-                    name, age, grade, language,
-                    st.session_state.plan_text or "",
-                    st.session_state.blooms_text
-                )
-                st.download_button(
-                    label="⬇️ Download Report Card PDF",
-                    data=pdf_buffer,
-                    file_name=f"{name}_Family_Library_Report.pdf",
-                    mime="application/pdf"
-                )
-                if GA_ID:
-                    st.markdown("""<script>
-gtag('event', 'report_downloaded', {
-  'event_category': 'engagement'
-});
-</script>""", unsafe_allow_html=True)
-
-# ═══════════════════════════════════════════════
-# GLOBAL TIMER TICK — auto-refresh while test runs
-# ═══════════════════════════════════════════════
-if st.session_state.test_active and not st.session_state.test_submitted:
-    time.sleep(1)
-    st.rerun()
+    # ═══════════════════════════════════════════════
+    # GLOBAL TIMER TICK — auto-refresh while test runs
+    # ═══════════════════════════════════════════════
+    if st.session_state.test_active and not st.session_state.test_submitted:
+        time.sleep(1)
+        st.rerun()
