@@ -291,20 +291,26 @@ st.markdown(f'<head>{pwa_html}</head>', unsafe_allow_html=True)
 
 # Google Analytics
 GA_ID = os.getenv("GA_MEASUREMENT_ID", "")
+print(f"GA_ID loaded: {GA_ID if GA_ID else 'NOT FOUND'}")
 if GA_ID:
-    ga_html = f"""
+    components.html(f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
     <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag(){{dataLayer.push(arguments);}}
       gtag('js', new Date());
       gtag('config', '{GA_ID}', {{
-        page_title: 'Family Library AI Companion',
-        page_location: 'https://family-library.streamlit.app'
+        'page_title': 'Family Library AI Companion',
+        'page_location': 'https://family-library.streamlit.app'
       }});
     </script>
-    """
-    st.markdown(ga_html, unsafe_allow_html=True)
+    </head>
+    <body></body>
+    </html>
+    """, height=0)
 
 st.markdown("""
 <style>
