@@ -8,6 +8,7 @@ if sys.version_info < (3, 9):
     hashlib.md5 = _patched_md5
 
 import streamlit as st
+import streamlit.components.v1 as components
 from groq import Groq
 import httpx
 import base64
@@ -276,6 +277,17 @@ def generate_pdf_report(name, age, grade, language, plan_text, blooms_text=None)
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Family Library AI Companion", page_icon="📚", layout="wide")
+
+# PWA Support
+pwa_html = """
+<link rel="manifest" href="/app/static/manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Family Library">
+<meta name="theme-color" content="#1f77b4">
+"""
+st.markdown(f'<head>{pwa_html}</head>', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
