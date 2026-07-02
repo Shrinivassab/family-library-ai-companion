@@ -289,6 +289,23 @@ pwa_html = """
 """
 st.markdown(f'<head>{pwa_html}</head>', unsafe_allow_html=True)
 
+# Google Analytics
+GA_ID = os.getenv("GA_MEASUREMENT_ID", "")
+if GA_ID:
+    ga_html = f"""
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{GA_ID}', {{
+        page_title: 'Family Library AI Companion',
+        page_location: 'https://family-library.streamlit.app'
+      }});
+    </script>
+    """
+    st.markdown(ga_html, unsafe_allow_html=True)
+
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
@@ -436,6 +453,14 @@ Do NOT talk about cover pages, index pages, or generic book structure.
 
                 st.session_state.plan_text = call_ai(prompt, image_b64)
                 st.success("✅ Reading plan generated!")
+                if GA_ID:
+                    st.markdown(f"""<script>
+gtag('event', 'reading_plan_generated', {{
+  'child_grade': '{grade}',
+  'language': '{language}',
+  'file_type': '{st.session_state.get("file_type_cache", "none")}'
+}});
+</script>""", unsafe_allow_html=True)
 
     if st.session_state.plan_text:
         st.markdown(st.session_state.plan_text)
@@ -506,6 +531,13 @@ Use ONLY what you see in this book. No placeholders.
 
                 st.session_state.blooms_text = call_ai(blooms_prompt, image_b64)
                 st.success("✅ Bloom's questions generated!")
+                if GA_ID:
+                    st.markdown(f"""<script>
+gtag('event', 'blooms_questions_generated', {{
+  'child_grade': '{grade}',
+  'language': '{language}'
+}});
+</script>""", unsafe_allow_html=True)
 
     if st.session_state.blooms_text:
         st.markdown(st.session_state.blooms_text)
@@ -786,6 +818,12 @@ Example format:
 
         # ── RESULTS ──
         if st.session_state.test_submitted:
+            if GA_ID:
+                st.markdown("""<script>
+gtag('event', 'self_analysis_test_completed', {
+  'event_category': 'engagement'
+});
+</script>""", unsafe_allow_html=True)
             questions = st.session_state.test_questions
             answers = st.session_state.test_answers
 
@@ -903,6 +941,12 @@ with tab5:
                     file_name=f"{name}_Family_Library_Report.pdf",
                     mime="application/pdf"
                 )
+                if GA_ID:
+                    st.markdown("""<script>
+gtag('event', 'report_downloaded', {
+  'event_category': 'engagement'
+});
+</script>""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════
 # GLOBAL TIMER TICK — auto-refresh while test runs
